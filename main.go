@@ -62,11 +62,12 @@ const (
 )
 
 var (
-	templates     *template.Template
-	dbx           *sqlx.DB
-	store         sessions.Store
-	userSimpleCache     *cache.Cache
-	categoryCache *cache.Cache
+	templates       *template.Template
+	dbx             *sqlx.DB
+	store           sessions.Store
+	userSimpleCache *cache.Cache
+	categoryCache   *cache.Cache
+	itemEvidenceCache *cache.Cache
 )
 
 type Config struct {
@@ -473,6 +474,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 func initCache() {
 	userSimpleCache = cache.New(5*time.Minute, 10*time.Minute)
 	categoryCache = cache.New(5*time.Minute, 10*time.Minute)
+	itemEvidenceCache = cache.New(5*time.Minute, 10*time.Minute)
 }
 
 func postInitialize(w http.ResponseWriter, r *http.Request) {
@@ -862,6 +864,52 @@ func getUserItems(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(rui)
 }
 
+type OrderStatus struct {
+	TransactionEvidenceID int64
+	TransactionEvidenceStatus string
+	ShippingReserveID string
+	ShippingStatus string
+}
+
+func getOrderStatus(tx *sqlx.Tx, w http.ResponseWriter, itemID int64) (*OrderStatus, error) {
+	o := OrderStatus{}
+	err := tx.QueryRow("SELECT id, status FROM `transaction_evidences` WHERE `item_id` = ?", itemID).Scan(
+		&o.TransactionEvidenceID, &o.TransactionEvidenceStatus)
+	if err != nil && err != sql.ErrNoRows {
+		// It's able to ignore ErrNoRows
+		log.Print(err)
+		outputErrorMsg(w, http.StatusInternalServerError, "db error")
+		tx.Rollback()
+		return nil, err
+	}
+
+	if o.TransactionEvidenceID > 0 {
+		err = tx.QueryRow("SELECT reserve_id FROM `shippings` WHERE `transaction_evidence_id` = ?", o.TransactionEvidenceID).Scan(&o.ShippingReserveID)
+		if err == sql.ErrNoRows {
+			outputErrorMsg(w, http.StatusNotFound, "shipping not found")
+			tx.Rollback()
+			return nil, err
+		}
+		if err != nil {
+			log.Print(err)
+			outputErrorMsg(w, http.StatusInternalServerError, "db error")
+			tx.Rollback()
+			return nil, err
+		}
+		ssr, err := APIShipmentStatus(getShipmentServiceURL(), &APIShipmentStatusReq{
+			ReserveID: o.ShippingReserveID,
+		})
+		if err != nil {
+			log.Print(err)
+			outputErrorMsg(w, http.StatusInternalServerError, "failed to request to shipment service")
+			tx.Rollback()
+			return nil, err
+		}
+		o.ShippingStatus = ssr.Status
+	}
+	return &o, nil
+}
+
 func getTransactions(w http.ResponseWriter, r *http.Request) {
 
 	user, errCode, errMsg := getUser(r)
@@ -982,44 +1030,13 @@ func getTransactions(w http.ResponseWriter, r *http.Request) {
 			itemDetail.Buyer = &buyer
 		}
 
-		transactionEvidence := TransactionEvidence{}
-		err = tx.Get(&transactionEvidence, "SELECT * FROM `transaction_evidences` WHERE `item_id` = ?", item.ID)
-		if err != nil && err != sql.ErrNoRows {
-			// It's able to ignore ErrNoRows
-			log.Print(err)
-			outputErrorMsg(w, http.StatusInternalServerError, "db error")
-			tx.Rollback()
+		orderStatus, err := getOrderStatus(tx, w, item.ID)
+		if (err != nil) {
 			return
 		}
-
-		if transactionEvidence.ID > 0 {
-			shipping := Shipping{}
-			err = tx.Get(&shipping, "SELECT * FROM `shippings` WHERE `transaction_evidence_id` = ?", transactionEvidence.ID)
-			if err == sql.ErrNoRows {
-				outputErrorMsg(w, http.StatusNotFound, "shipping not found")
-				tx.Rollback()
-				return
-			}
-			if err != nil {
-				log.Print(err)
-				outputErrorMsg(w, http.StatusInternalServerError, "db error")
-				tx.Rollback()
-				return
-			}
-			ssr, err := APIShipmentStatus(getShipmentServiceURL(), &APIShipmentStatusReq{
-				ReserveID: shipping.ReserveID,
-			})
-			if err != nil {
-				log.Print(err)
-				outputErrorMsg(w, http.StatusInternalServerError, "failed to request to shipment service")
-				tx.Rollback()
-				return
-			}
-
-			itemDetail.TransactionEvidenceID = transactionEvidence.ID
-			itemDetail.TransactionEvidenceStatus = transactionEvidence.Status
-			itemDetail.ShippingStatus = ssr.Status
-		}
+		itemDetail.TransactionEvidenceID = orderStatus.TransactionEvidenceID
+		itemDetail.TransactionEvidenceStatus = orderStatus.TransactionEvidenceStatus
+		itemDetail.ShippingStatus = orderStatus.ShippingStatus
 
 		itemDetails = append(itemDetails, itemDetail)
 	}
