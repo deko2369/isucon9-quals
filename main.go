@@ -68,6 +68,7 @@ var (
 	userSimpleCache *cache.Cache
 	categoryCache   *cache.Cache
 	itemEvidenceCache *cache.Cache
+	configCache  map[string]string
 )
 
 type Config struct {
@@ -439,6 +440,10 @@ func getCategoryByID(q sqlx.Queryer, categoryID int) (category Category, err err
 }
 
 func getConfigByName(name string) (string, error) {
+	v, ok := configCache[name]
+	if ok {
+		return v, nil
+	}
 	config := Config{}
 	err := dbx.Get(&config, "SELECT * FROM `configs` WHERE `name` = ?", name)
 	if err == sql.ErrNoRows {
@@ -448,6 +453,7 @@ func getConfigByName(name string) (string, error) {
 		log.Print(err)
 		return "", err
 	}
+	configCache[name] = config.Val
 	return config.Val, err
 }
 
@@ -475,6 +481,7 @@ func initCache() {
 	userSimpleCache = cache.New(5*time.Minute, 10*time.Minute)
 	categoryCache = cache.New(5*time.Minute, 10*time.Minute)
 	itemEvidenceCache = cache.New(5*time.Minute, 10*time.Minute)
+	configCache = make(map[string]string)
 }
 
 func postInitialize(w http.ResponseWriter, r *http.Request) {
