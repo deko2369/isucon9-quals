@@ -313,14 +313,16 @@ func main() {
 		password = "isucari"
 	}
 
-	dsn := fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
-		user,
-		password,
-		host,
-		port,
-		dbname,
-	)
+	// dsn := fmt.Sprintf(
+	// 	"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
+	// 	user,
+	// 	password,
+	// 	host,
+	// 	port,
+	// 	dbname,
+	// )
+	dsn := fmt.Sprintf("%s:%s@unix(/var/run/mysqld/mysqld.sock)/%s?parseTime=true&loc=Local&charset=utf8mb4",
+	user, password, dbname)
 
 	dbx, err = sqlx.Open("mysql", dsn)
 	if err != nil {
