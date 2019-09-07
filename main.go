@@ -325,6 +325,7 @@ func main() {
 		log.Fatalf("failed to connect to DB: %s.", err.Error())
 	}
 	defer dbx.Close()
+	initCache()
 
 	mux := goji.NewMux()
 
@@ -405,27 +406,33 @@ func getUser(r *http.Request) (user User, errCode int, errMsg string) {
 func getUserSimpleByID(q sqlx.Queryer, userID int64) (userSimple UserSimple, err error) {
 	u, found := userCache.Get(fmt.Sprintf("%d", userID))
 	if found {
-		userSimple.ID = u.(*User).ID
-		userSimple.AccountName = u.(*User).AccountName
-		userSimple.NumSellItems = u.(*User).NumSellItems
-		return userSimple, err
-	} else {
-		user := User{}
-		err = sqlx.Get(q, &user, "SELECT * FROM `users` WHERE `id` = ?", userID)
-		if err != nil {
-			return userSimple, err
-		}
-		userSimple.ID = user.ID
-		userSimple.AccountName = user.AccountName
-		userSimple.NumSellItems = user.NumSellItems
-
-		userCache.Set(fmt.Sprintf("%d", userID), &userSimple, cache.DefaultExpiration)
-
+		userSimple.ID = u.(*UserSimple).ID
+		userSimple.AccountName = u.(*UserSimple).AccountName
+		userSimple.NumSellItems = u.(*UserSimple).NumSellItems
 		return userSimple, err
 	}
+
+	user := User{}
+	err = sqlx.Get(q, &user, "SELECT * FROM `users` WHERE `id` = ?", userID)
+	if err != nil {
+		return userSimple, err
+	}
+	userSimple.ID = user.ID
+	userSimple.AccountName = user.AccountName
+	userSimple.NumSellItems = user.NumSellItems
+
+	userCache.Set(fmt.Sprintf("%d", userID), &userSimple, cache.DefaultExpiration)
+
+	return userSimple, err
+
 }
 
 func getCategoryByID(q sqlx.Queryer, categoryID int) (category Category, err error) {
+	c, found := categoryCache.Get(fmt.Sprintf("%d", categoryID))
+	if found {
+		return *(c.(*Category)), err
+	}
+
 	err = sqlx.Get(q, &category, "SELECT * FROM `categories` WHERE `id` = ?", categoryID)
 	if category.ParentID != 0 {
 		parentCategory, err := getCategoryByID(q, category.ParentID)
@@ -434,6 +441,7 @@ func getCategoryByID(q sqlx.Queryer, categoryID int) (category Category, err err
 		}
 		category.ParentCategoryName = parentCategory.CategoryName
 	}
+	categoryCache.Set(fmt.Sprintf("%d", categoryID), &category, cache.DefaultExpiration)
 	return category, err
 }
 
@@ -470,9 +478,13 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 	templates.ExecuteTemplate(w, "index.html", struct{}{})
 }
 
-func postInitialize(w http.ResponseWriter, r *http.Request) {
+func initCache() {
 	userCache = cache.New(5*time.Minute, 10*time.Minute)
 	categoryCache = cache.New(5*time.Minute, 10*time.Minute)
+}
+
+func postInitialize(w http.ResponseWriter, r *http.Request) {
+	initCache()
 
 	ri := reqInitialize{}
 
