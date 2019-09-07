@@ -65,7 +65,7 @@ var (
 	templates     *template.Template
 	dbx           *sqlx.DB
 	store         sessions.Store
-	userCache     *cache.Cache
+	userSimpleCache     *cache.Cache
 	categoryCache *cache.Cache
 )
 
@@ -404,7 +404,7 @@ func getUser(r *http.Request) (user User, errCode int, errMsg string) {
 }
 
 func getUserSimpleByID(q sqlx.Queryer, userID int64) (userSimple UserSimple, err error) {
-	u, found := userCache.Get(fmt.Sprintf("%d", userID))
+	u, found := userSimpleCache.Get(fmt.Sprintf("%d", userID))
 	// fmt.Println(userID, u, found)
 	if found {
 		return *(u.(*UserSimple)), err
@@ -414,7 +414,7 @@ func getUserSimpleByID(q sqlx.Queryer, userID int64) (userSimple UserSimple, err
 		return userSimple, err
 	}
 	// fmt.Println("Fetched", userSimple)
-	userCache.Set(fmt.Sprintf("%d", userID), &userSimple, cache.DefaultExpiration)
+	userSimpleCache.Set(fmt.Sprintf("%d", userID), &userSimple, cache.DefaultExpiration)
 
 	return userSimple, err
 }
@@ -471,7 +471,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func initCache() {
-	userCache = cache.New(5*time.Minute, 10*time.Minute)
+	userSimpleCache = cache.New(5*time.Minute, 10*time.Minute)
 	categoryCache = cache.New(5*time.Minute, 10*time.Minute)
 }
 
@@ -2046,7 +2046,7 @@ func postSell(w http.ResponseWriter, r *http.Request) {
 	}
 	tx.Commit()
 
-	u, found := userCache.Get(fmt.Sprintf("%d", seller.ID))
+	u, found := userSimpleCache.Get(fmt.Sprintf("%d", seller.ID))
 	if found {
 		u.(*UserSimple).NumSellItems++
 	}
