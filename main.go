@@ -9,16 +9,17 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
-	_ "net/http/pprof"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
+	"github.com/patrickmn/go-cache"
 	goji "goji.io"
 	"goji.io/pat"
 	"golang.org/x/crypto/bcrypt"
@@ -61,9 +62,11 @@ const (
 )
 
 var (
-	templates *template.Template
-	dbx       *sqlx.DB
-	store     sessions.Store
+	templates     *template.Template
+	dbx           *sqlx.DB
+	store         sessions.Store
+	userCache     *cache.Cache
+	categoryCache *cache.Cache
 )
 
 type Config struct {
@@ -400,15 +403,26 @@ func getUser(r *http.Request) (user User, errCode int, errMsg string) {
 }
 
 func getUserSimpleByID(q sqlx.Queryer, userID int64) (userSimple UserSimple, err error) {
-	user := User{}
-	err = sqlx.Get(q, &user, "SELECT * FROM `users` WHERE `id` = ?", userID)
-	if err != nil {
+	u, found := userCache.Get(fmt.Sprintf("%d", userID))
+	if found {
+		userSimple.ID = u.(*User).ID
+		userSimple.AccountName = u.(*User).AccountName
+		userSimple.NumSellItems = u.(*User).NumSellItems
+		return userSimple, err
+	} else {
+		user := User{}
+		err = sqlx.Get(q, &user, "SELECT * FROM `users` WHERE `id` = ?", userID)
+		if err != nil {
+			return userSimple, err
+		}
+		userSimple.ID = user.ID
+		userSimple.AccountName = user.AccountName
+		userSimple.NumSellItems = user.NumSellItems
+
+		userCache.Set(fmt.Sprintf("%d", userID), &userSimple, cache.DefaultExpiration)
+
 		return userSimple, err
 	}
-	userSimple.ID = user.ID
-	userSimple.AccountName = user.AccountName
-	userSimple.NumSellItems = user.NumSellItems
-	return userSimple, err
 }
 
 func getCategoryByID(q sqlx.Queryer, categoryID int) (category Category, err error) {
@@ -457,6 +471,9 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func postInitialize(w http.ResponseWriter, r *http.Request) {
+	userCache = cache.New(5*time.Minute, 10*time.Minute)
+	categoryCache = cache.New(5*time.Minute, 10*time.Minute)
+
 	ri := reqInitialize{}
 
 	err := json.NewDecoder(r.Body).Decode(&ri)
